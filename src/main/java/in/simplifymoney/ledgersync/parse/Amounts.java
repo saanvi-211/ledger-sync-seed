@@ -14,8 +14,14 @@ public final class Amounts {
 
     private Amounts() {}
 
+    /**
+     * Decimals are optional because banks write whole-rupee amounts without
+     * them ("Rs.5", "INR 18,000"). Requiring exactly two decimals made
+     * "first()" skip the real amount and grab the stated balance instead -
+     * that is exactly what INC-2026-09-11 was.
+     */
     private static final Pattern AMOUNT =
-            Pattern.compile("(?:Rs\\.?|INR)\\s*([0-9,]+\\.[0-9]{2})");
+            Pattern.compile("(?:Rs\\.?|INR)\\s*([0-9,]+(?:\\.[0-9]{2})?)");
 
     private static final Pattern BALANCE = Pattern.compile(
             "(?:Avl\\s*Bal|Available\\s*Balance|BalAvl|Avl\\s*Limit)\\s*:?\\s*"

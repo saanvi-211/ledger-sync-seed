@@ -16,6 +16,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.TreeSet;
 
 /**
  * The store this service has used since it was written: a single relational
@@ -78,10 +79,50 @@ public final class SqlLedgerStore implements LedgerStore, AutoCloseable {
 
     @Override
     public void save(NormalizedTxn t) {
+        insert(t, LedgerIdentity.of(t));
+    }
+
+    @Override
+    public void upsert(NormalizedTxn t) {
+        String key = LedgerIdentity.of(t);
+        String merged = null;
+        try (PreparedStatement q = conn.prepareStatement(
+                "SELECT source_message_ids FROM ledger WHERE identity_key = ?")) {
+            q.setString(1, key);
+            try (ResultSet rs = q.executeQuery()) {
+                if (rs.next()) {
+                    TreeSet<String> ids = new TreeSet<>(
+                            Arrays.stream(rs.getString(1).split(","))
+                                    .filter(s -> !s.isBlank()).toList());
+                    ids.addAll(t.sourceMessageIds());
+                    merged = String.join(",", ids);
+                }
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("could not read existing " + t, e);
+        }
+        if (merged == null) {
+            insert(t, key);
+            return;
+        }
+        try (PreparedStatement up = conn.prepareStatement(
+                "UPDATE ledger SET category = ?, merchant = ?, source_message_ids = ?"
+                        + " WHERE identity_key = ?")) {
+            up.setString(1, t.category().name());
+            up.setString(2, t.merchant());
+            up.setString(3, merged);
+            up.setString(4, key);
+            up.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("could not merge " + t, e);
+        }
+    }
+
+    private void insert(NormalizedTxn t, String key) {
         try (PreparedStatement ps = conn.prepareStatement(
                 "INSERT INTO ledger(account_last4, occurred_at, direction, amount,"
-                        + " category, merchant, source_message_ids)"
-                        + " VALUES (?,?,?,?,?,?,?)")) {
+                        + " category, merchant, source_message_ids, identity_key)"
+                        + " VALUES (?,?,?,?,?,?,?,?)")) {
             ps.setString(1, t.accountLast4());
             ps.setString(2, t.occurredAt().toString());
             ps.setString(3, t.direction().name());
@@ -89,10 +130,42 @@ public final class SqlLedgerStore implements LedgerStore, AutoCloseable {
             ps.setString(5, t.category().name());
             ps.setString(6, t.merchant());
             ps.setString(7, String.join(",", t.sourceMessageIds()));
+            ps.setString(8, key);
             ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("could not save " + t, e);
         }
+    }
+
+    @Override
+    public void saveBalancePoint(BalancePoint p) {
+        try (PreparedStatement ps = conn.prepareStatement(
+                "MERGE INTO balance_points (account_last4, as_of, stated_balance)"
+                        + " KEY(account_last4, as_of, stated_balance) VALUES (?,?,?)")) {
+            ps.setString(1, p.accountLast4());
+            ps.setString(2, p.asOf().toString());
+            ps.setBigDecimal(3, p.statedBalance());
+            ps.executeUpdate();
+        } catch (SQLException e) {
+            throw new IllegalStateException("could not save balance point", e);
+        }
+    }
+
+    @Override
+    public List<BalancePoint> balancePoints() {
+        List<BalancePoint> out = new ArrayList<>();
+        try (Statement st = conn.createStatement();
+             ResultSet rs = st.executeQuery(
+                     "SELECT account_last4, as_of, stated_balance FROM balance_points")) {
+            while (rs.next()) {
+                out.add(new BalancePoint(rs.getString(1),
+                        OffsetDateTime.parse(rs.getString(2)),
+                        rs.getBigDecimal(3).setScale(2)));
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("could not read balance points", e);
+        }
+        return out;
     }
 
     @Override

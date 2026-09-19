@@ -5,10 +5,12 @@ import in.simplifymoney.ledgersync.json.Json;
 import in.simplifymoney.ledgersync.model.Category;
 import in.simplifymoney.ledgersync.model.NormalizedTxn;
 import in.simplifymoney.ledgersync.parse.Parsers;
+import in.simplifymoney.ledgersync.report.Reports;
 import in.simplifymoney.ledgersync.store.InMemoryLedgerStore;
 import java.math.BigDecimal;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -70,6 +72,48 @@ public final class SelfCheck {
                     running.toPlainString(), closing.toPlainString(),
                     running.subtract(closing).toPlainString());
         }
-        System.out.println("\nThis is the starting point, not the finish line.");
+
+        Map<String, Reports.AccountMeta> meta = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : accounts.entrySet()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> a = (Map<String, Object>) e.getValue();
+            meta.put(e.getKey(), new Reports.AccountMeta(
+                    (String) a.get("opening_balance"),
+                    (String) a.get("closing_balance")));
+        }
+        Map<String, Object> rec = Reports.reconciliation(ledger, store.balancePoints(), meta);
+        @SuppressWarnings("unchecked")
+        List<Object> discrepancies = (List<Object>) rec.get("discrepancies");
+        System.out.println("\nRECONCILIATION (bank-stated balance vs ledger)");
+        for (Object d : discrepancies) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> m = (Map<String, Object>) d;
+            System.out.printf("  **%s %s -> %s: %s %s%n", m.get("account_last4"),
+                    m.get("from_at"), m.get("to_at"),
+                    m.get("kind"), m.get("amount"));
+        }
+        if (discrepancies.isEmpty()) System.out.println("  none - the ledger accounts for everything");
+        System.out.println("\nTip: your corpus may not be able to reach the expected totals\n"
+                + "by design. If a discrepancy survives every check, say so and say why.");
+
+        Path outDir = args.length > 2 ? Path.of(args[2]) : null;
+        if (outDir == null) return;
+        Files.createDirectories(outDir);
+        Map<String, Reports.AccountMeta> metaMap = new LinkedHashMap<>();
+        for (Map.Entry<String, Object> e : accounts.entrySet()) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> a = (Map<String, Object>) e.getValue();
+            metaMap.put(e.getKey(), new Reports.AccountMeta(
+                    (String) a.get("opening_balance"),
+                    (String) a.get("closing_balance")));
+        }
+        Files.writeString(outDir.resolve("ledger.json"),
+                Json.writePretty(Reports.ledgerDocument(ledger)));
+        Files.writeString(outDir.resolve("summary.json"),
+                Json.writePretty(Reports.summary(ledger)));
+        Files.writeString(outDir.resolve("reconciliation.json"),
+                Json.writePretty(Reports.reconciliation(ledger,
+                        store.balancePoints(), metaMap)));
+        System.out.println("\nwrote ledger.json, summary.json, reconciliation.json to " + outDir);
     }
 }

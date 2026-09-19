@@ -45,4 +45,30 @@ class AmountsTest {
     void ignoresAMessageWithNoAmountAtAll() {
         assertEquals(null, Amounts.first("Your Swiggy order is on the way!"));
     }
+
+    // Regression for INC-2026-09-11: whole-rupee amounts ("Rs.5", "INR 18,000")
+    // carry no decimals, so they were skipped and the first match became the
+    // stated balance. The amount must be the actual transaction, never the
+    // balance.
+    @Test
+    void readsAWholeRupeeDebitAndNotTheBalance() {
+        assertEquals(new BigDecimal("5.00"),
+                Amounts.first("Rs.5 debited from a/c **4821 on 04-07-26 at 07:19 "
+                        + "to UPI/WATER CAN. Avl Bal: Rs.92,213.10."));
+    }
+
+    @Test
+    void readsAWholeRupeeCreditAndNotTheBalance() {
+        assertEquals(new BigDecimal("18000.00"),
+                Amounts.first("Dear Customer, Acct XX9075 is credited with INR 18,000 "
+                        + "on 01/07/2026 21:14. Info: NEFT INWARD SELF. "
+                        + "Avl Bal Rs.49,882.25"));
+    }
+
+    @Test
+    void readsCommaFreeWholeRupeeSent() {
+        assertEquals(new BigDecimal("5555.55"),
+                Amounts.first("Sent INR5,555.55\nTo: UBER INDIA\nOn: 30 Jul 26 21:06\n"
+                        + "A/c: XX4821\nAvailable Balance: INR 21534.45\n-HDFC Bank"));
+    }
 }
